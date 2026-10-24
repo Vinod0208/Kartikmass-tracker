@@ -15,9 +15,7 @@ function App() {
   const [session, setSession] = useState<any>(null)
   const [profile, setProfile] = useState<Profile | null>(null)
   const [screen, setScreen] = useState<'dashboard' | 'choose' | 'admin'>('dashboard')
-  const [authMode, setAuthMode] = useState<'login' | 'signup' | 'forgot'>('login')
-  const [resetPasswordMode, setResetPasswordMode] = useState(false)
-  const [newPassword, setNewPassword] = useState('')
+  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login')
   const [savingVow, setSavingVow] = useState(false)
   const [authName, setAuthName] = useState('')
   const [authEmail, setAuthEmail] = useState('')
@@ -37,6 +35,7 @@ function App() {
   const [adminLogs, setAdminLogs] = useState<(DailyLog & { profile?: Profile; vow?: Vow })[]>([])
   const [adminSearch, setAdminSearch] = useState('')
   const [deletingUserId, setDeletingUserId] = useState<string | null>(null)
+  const [resettingUserId, setResettingUserId] = useState<string | null>(null)
 
   const notify = (msg: string) => { setNotice(msg); window.setTimeout(() => setNotice(''), 5000) }
 
@@ -63,7 +62,6 @@ function App() {
     if (!supabase) return
     supabase.auth.getSession().then(({ data }) => setSession(data.session))
     const { data: listener } = supabase.auth.onAuthStateChange((event, newSession) => {
-      if (event === 'PASSWORD_RECOVERY') setResetPasswordMode(true)
       setSession(newSession)
     })
     return () => listener.subscription.unsubscribe()
@@ -97,112 +95,17 @@ function App() {
     if (!supabase) return
     setAuthBusy(true); setNotice('')
     try {
-      if (authMode === 'forgot') {
-        const { error } = await supabase.auth.resetPasswordForEmail(authEmail.trim(), { redirectTo: `${window.location.origin}/` })
-        if (error) throw error
-        notify('If an account exists for this email, a password reset link has been sent.')
-        return
-      }
       if (authMode === 'signup') {
         const { data, error } = await supabase.auth.signUp({ email: authEmail.trim(), password: authPassword, options: { data: { full_name: authName.trim() } } })
         if (error) throw error
         if (data.session) notify('Account created. Welcome! Choose your Kartik sankalps.')
-        else notify('Signup successful. Check your email to confirm your account, then log in.')
+        else notify('Account created. If you cannot sign in, ask the temple admin to check Supabase email-confirmation settings.')
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email: authEmail.trim(), password: authPassword })
         if (error) throw error
       }
     } catch (err: any) { notify(err.message || 'Authentication failed.') }
     finally { setAuthBusy(false) }
-  }
-
-  async function updatePassword(e: FormEvent) {
-    e.preventDefault()
-    if (!supabase) return
-    if (newPassword.length < 8) return notify('Password must be at least 8 characters.')
-    setAuthBusy(true)
-    try {
-      const { error } = await supabase.auth.updateUser({ password: newPassword })
-      if (error) throw error
-      setResetPasswordMode(false); setNewPassword(''); notify('Password updated successfully.')
-      await supabase.auth.signOut()
-      setAuthMode('login')
-    } catch (err: any) { notify(err.message || 'Could not update password.') }
-    finally { setAuthBusy(false) }
-  }
-
-  async function signOut() {
-    if (supabase) await supabase.auth.signOut()
-    setScreen('dashboard')
-  }
-
-  async function addVow(e: FormEvent) {
-    e.preventDefault()
-    if (!supabase || !profile) return
-    setSavingVow(true)
-    const name = newVow.name.trim()
-    if (name.length < 3) { setSavingVow(false); return notify('Please enter a vow name with at least 3 characters.') }
-    const duplicate = vows.some(v => v.name.toLocaleLowerCase() === name.toLocaleLowerCase())
-    if (duplicate) { setSavingVow(false); return notify('A similar vow already exists in the shared list.') }
-    const { data, error } = await supabase.from('vows').insert({
-      name, description: newVow.description.trim() || null,
-      category: newVow.category.trim() || 'Personal', unit: newVow.unit.trim() || null,
-      created_by: profile.id
-    }).select().single()
-    if (error) { setSavingVow(false); return notify(error.message) }
-    setSavingVow(false)
-    setVows(old => [...old, data as Vow].sort((a, b) => a.name.localeCompare(b.name)))
-    setSelectedIds(old => [...old, data.id])
-    setNewVow({ name: '', description: '', category: 'Personal', unit: '' })
-    notify('Vow added to the shared list and selected for you.')
-  }
-
-  async function saveSelections() {
-    if (!supabase || !profile) return
-    if (!selectedIds.length) return notify('Please select at least one vow.')
-    setLoading(true)
-    try {
-      const { error } = await supabase.rpc('save_initial_kartik_sankalps', { p_vow_ids: [...new Set(selectedIds)] })
-      if (error) throw error
-      await loadCore(profile.id)
-      setScreen('dashboard')
-      notify('Your Kartik sankalps are saved and locked.')
-    } catch (err: any) {
-      notify(err.message || 'Could not save sankalps. Please refresh and try again.')
-    } finally { setLoading(false) }
-  }
-
-  async function saveTodayCheckin() {
-    if (!supabase || !profile) return
-    if (!myVows.length) return notify('Please save your sankalps before checking in.')
-    setLoading(true)
-    try {
-      const currentDay = today()
-      const rows = myVows.map(vow => {
-        const completed = Boolean(drafts[vow.id]?.completed)
-        return {
-          user_id: profile.id,
-          vow_id: vow.id,
-          log_date: currentDay,
-          quantity: null,
-          unit: null,
-          progress_percent: completed ? 100 : 0,
-          completed,
-          reason: null,
-          notes: null,
-          updated_at: new Date().toISOString()
-        }
-      })
-      const { error } = await supabase.from('daily_logs').upsert(rows, { onConflict: 'user_id,vow_id,log_date' })
-      if (error) throw error
-      setLogDate(currentDay)
-      await loadCore(profile.id)
-      notify('Today’s sankalp check-in saved.')
-    } catch (err: any) {
-      notify(err.message || 'Could not save today’s check-in. Please try again.')
-    } finally {
-      setLoading(false)
-    }
   }
 
   async function loadAdmin() {
@@ -223,6 +126,25 @@ function App() {
   }
 
   useEffect(() => { if (screen === 'admin' && profile?.role === 'admin') void loadAdmin() }, [screen, profile?.role, vows.length])
+
+  async function resetDevoteePassword(user: Profile) {
+    if (!supabase || profile?.role !== 'admin' || user.role === 'admin') return
+    const temporaryPassword = window.prompt(`Set a temporary password for ${user.full_name || user.email || 'this devotee'}. Use at least 8 characters and share it privately.`)
+    if (temporaryPassword === null) return
+    if (temporaryPassword.length < 8) return notify('Temporary password must be at least 8 characters.')
+    if (!window.confirm(`Set this temporary password for ${user.full_name || user.email || 'this devotee'}? Share it privately and ask them to change it after signing in.`)) return
+    setResettingUserId(user.id)
+    const { data, error } = await supabase.functions.invoke('admin-reset-user-password', { body: { userId: user.id, password: temporaryPassword } })
+    setResettingUserId(null)
+    if (error) {
+      let detail = error.message || 'Could not reset password.'
+      try { const body = await error.context?.json?.(); if (body?.error) detail = body.error } catch { /* Keep SDK message. */ }
+      notify(`${detail} Make sure the admin-reset-user-password Edge Function is deployed.`)
+      return
+    }
+    if (data?.error) return notify(data.error)
+    notify('Temporary password set. Share it privately with the devotee.')
+  }
 
   async function deleteDevotee(user: Profile) {
     if (!supabase || profile?.role !== 'admin' || user.role === 'admin') return
@@ -262,11 +184,10 @@ function App() {
   }
 
   if (!hasSupabaseConfig) return <SetupScreen />
-  if (resetPasswordMode) return <div className="auth-page"><div className="auth-form-wrap"><form className="auth-card" onSubmit={updatePassword}><div className="auth-symbol"><ShieldCheck size={27}/></div><span className="eyebrow">SECURE YOUR ACCOUNT</span><h2>Set a new password</h2><p className="auth-subtitle">Choose a new password with at least 8 characters.</p>{notice && <div className="inline-notice">{notice}</div>}<label className="field"><span>New password</span><input required minLength={8} type="password" autoComplete="new-password" value={newPassword} onChange={e=>setNewPassword(e.target.value)} placeholder="At least 8 characters"/></label><button className="btn btn-primary auth-submit" disabled={authBusy}>{authBusy ? <><span className="spinner"/> Updating…</> : 'Update password'}</button></form></div></div>
   if (!session) return <AuthScreen
     mode={authMode} setMode={setAuthMode} name={authName} setName={setAuthName}
     email={authEmail} setEmail={setAuthEmail} password={authPassword} setPassword={setAuthPassword}
-    busy={authBusy} onSubmit={handleAuth} notice={notice} onForgot={() => setAuthMode('forgot')} />
+    busy={authBusy} onSubmit={handleAuth} notice={notice} />
 
   const firstVisit = selections.length === 0
 
@@ -379,7 +300,7 @@ function App() {
         <div className="panel"><div className="panel-heading"><div><h3>Devotees</h3><p>Account list and selected vow counts.</p></div><button className="btn btn-secondary btn-small" onClick={exportCSV}><Download size={15}/> Export CSV</button></div>
           <input className="search-input" value={adminSearch} onChange={e=>setAdminSearch(e.target.value)} placeholder="Search by name or email..."/>
           <div className="table-wrap"><table><thead><tr><th>Devotee</th><th>Email</th><th>Joined</th><th>Sankalps</th><th>Latest entry</th><th>Account actions</th></tr></thead><tbody>
-            {adminUsers.filter(u=>u.role!=='admin' && `${u.full_name} ${u.email}`.toLowerCase().includes(adminSearch.toLowerCase())).map(u => <tr key={u.id}><td><strong>{u.full_name || 'Devotee'}</strong></td><td>{u.email}</td><td>{new Date(u.created_at).toLocaleDateString('en-IN')}</td><td>{adminSelections.filter(s=>s.user_id===u.id).length}</td><td>{(adminLogs.filter(l=>l.user_id===u.id).map(l=>l.log_date).sort().slice(-1)[0]) || 'No entries'}</td><td><button className="btn btn-danger btn-small" disabled={deletingUserId!==null} onClick={() => void deleteDevotee(u)}><Trash2 size={14}/>{deletingUserId===u.id ? 'Deleting…' : 'Delete user'}</button></td></tr>)}
+            {adminUsers.filter(u=>u.role!=='admin' && `${u.full_name} ${u.email}`.toLowerCase().includes(adminSearch.toLowerCase())).map(u => <tr key={u.id}><td><strong>{u.full_name || 'Devotee'}</strong></td><td>{u.email}</td><td>{new Date(u.created_at).toLocaleDateString('en-IN')}</td><td>{adminSelections.filter(s=>s.user_id===u.id).length}</td><td>{(adminLogs.filter(l=>l.user_id===u.id).map(l=>l.log_date).sort().slice(-1)[0]) || 'No entries'}</td><td><div className="action-row"><button className="btn btn-secondary btn-small" disabled={resettingUserId!==null || deletingUserId!==null} onClick={() => void resetDevoteePassword(u)}><ShieldCheck size={14}/>{resettingUserId===u.id ? 'Resetting…' : 'Reset password'}</button><button className="btn btn-danger btn-small" disabled={deletingUserId!==null || resettingUserId!==null} onClick={() => void deleteDevotee(u)}><Trash2 size={14}/>{deletingUserId===u.id ? 'Deleting…' : 'Delete user'}</button></div></td></tr>)}
           </tbody></table></div>
         </div>
         <div className="panel"><div className="panel-heading"><div><h3>Recent daily progress</h3><p>Daily logs across devotees.</p></div></div>
@@ -403,19 +324,18 @@ function SetupScreen() {
 }
 
 function AuthScreen(props: {
-  mode:'login'|'signup'|'forgot'; setMode:(v:'login'|'signup'|'forgot')=>void; name:string; setName:(v:string)=>void;
+  mode:'login'|'signup'; setMode:(v:'login'|'signup')=>void; name:string; setName:(v:string)=>void;
   email:string; setEmail:(v:string)=>void; password:string; setPassword:(v:string)=>void;
-  busy:boolean; onSubmit:(e:FormEvent)=>void; notice:string; onForgot:()=>void
+  busy:boolean; onSubmit:(e:FormEvent)=>void; notice:string
 }) {
   return <div className="auth-page"><div className="auth-art"><div className="mandala">✺</div><span className="eyebrow light">ISKCON DEHRADUN PRESENTS</span><h1>Kartik Sankalp</h1><p>Make a sincere vow. Practice each day. Offer every step with devotion.</p><div className="auth-verse">“Remember Krishna and make your daily practice a loving offering.”</div><span className="art-footer">KARTIK MAAS · DAILY SPIRITUAL TRACKER</span></div>
-    <div className="auth-form-wrap"><form className="auth-card" onSubmit={props.onSubmit}><div className="auth-symbol"><Flame size={27}/></div><span className="eyebrow">{props.mode==='signup'?'BEGIN YOUR JOURNEY':props.mode==='forgot'?'ACCOUNT RECOVERY':'WELCOME BACK'}</span><h2>{props.mode==='signup'?'Create your account':props.mode==='forgot'?'Reset your password':'Sign in to continue'}</h2><p className="auth-subtitle">{props.mode==='signup'?'Create an account to choose and track your Kartik sankalps.':props.mode==='forgot'?'Enter your registered email and we will send a password reset link.':'Continue your Kartik sankalp journey.'}</p>
+    <div className="auth-form-wrap"><form className="auth-card" onSubmit={props.onSubmit}><div className="auth-symbol"><Flame size={27}/></div><span className="eyebrow">{props.mode==='signup'?'BEGIN YOUR JOURNEY':'WELCOME BACK'}</span><h2>{props.mode==='signup'?'Create your account':'Sign in to continue'}</h2><p className="auth-subtitle">{props.mode==='signup'?'Create an account to choose and track your Kartik sankalps.':'Continue your Kartik sankalp journey. If you forget your password, contact the temple admin.'}</p>
       {props.notice && <div className="inline-notice">{props.notice}</div>}
       {props.mode==='signup' && <label className="field"><span>Full name</span><input required autoComplete="name" value={props.name} onChange={e=>props.setName(e.target.value)} placeholder="Your full name"/></label>}
       <label className="field"><span>Email address</span><input required type="email" autoComplete="email" value={props.email} onChange={e=>props.setEmail(e.target.value)} placeholder="you@example.com"/></label>
-      {props.mode !== 'forgot' && <label className="field"><span>Password</span><input required type="password" minLength={props.mode==='signup'?8:1} autoComplete={props.mode==='signup'?'new-password':'current-password'} value={props.password} onChange={e=>props.setPassword(e.target.value)} placeholder={props.mode==='signup'?'At least 8 characters':'Your password'}/></label>}
-      {props.mode === 'login' && <p className="auth-switch forgot-link"><button type="button" onClick={props.onForgot}>Forgot password?</button></p>}
-      <button className="btn btn-primary auth-submit" disabled={props.busy}>{props.busy ? <><span className="spinner"/> Please wait…</> : <>{props.mode==='signup'?'Create account':props.mode==='forgot'?'Send reset link':'Sign in'} <CheckCircle2 size={17}/></>}</button>
-      <p className="auth-switch">{props.mode==='signup'?'Already have an account?':props.mode==='forgot'?'Remembered your password?':'New to the tracker?'} <button type="button" onClick={()=>props.setMode(props.mode==='signup' || props.mode==='forgot' ? 'login' : 'signup')}>{props.mode==='signup'?'Sign in':props.mode==='forgot'?'Back to sign in':'Create account'}</button></p>
+      <label className="field"><span>Password</span><input required type="password" minLength={props.mode==='signup'?8:1} autoComplete={props.mode==='signup'?'new-password':'current-password'} value={props.password} onChange={e=>props.setPassword(e.target.value)} placeholder={props.mode==='signup'?'At least 8 characters':'Your password'}/></label>
+      <button className="btn btn-primary auth-submit" disabled={props.busy}>{props.busy ? <><span className="spinner"/> Please wait…</> : <>{props.mode==='signup'?'Create account':'Sign in'} <CheckCircle2 size={17}/></>}</button>
+      <p className="auth-switch">{props.mode==='signup'?'Already have an account?':'New to the tracker?'} <button type="button" onClick={()=>props.setMode(props.mode==='signup' ? 'login' : 'signup')}>{props.mode==='signup'?'Sign in':'Create account'}</button></p>
       <p className="privacy-foot">Your daily notes are private to your account and authorized temple administrators.</p>
     </form></div>
   </div>
