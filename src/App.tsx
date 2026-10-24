@@ -61,7 +61,7 @@ function App() {
   useEffect(() => {
     if (!supabase) return
     supabase.auth.getSession().then(({ data }) => setSession(data.session))
-    const { data: listener } = supabase.auth.onAuthStateChange((event, newSession) => {
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
       setSession(newSession)
     })
     return () => listener.subscription.unsubscribe()
@@ -107,6 +107,81 @@ function App() {
     } catch (err: any) { notify(err.message || 'Authentication failed.') }
     finally { setAuthBusy(false) }
   }
+
+  async function signOut() {
+    if (supabase) await supabase.auth.signOut()
+    setScreen('dashboard')
+  }
+
+  async function addVow(e: FormEvent) {
+    e.preventDefault()
+    if (!supabase || !profile) return
+    setSavingVow(true)
+    const name = newVow.name.trim()
+    if (name.length < 3) { setSavingVow(false); return notify('Please enter a vow name with at least 3 characters.') }
+    const duplicate = vows.some(v => v.name.toLocaleLowerCase() === name.toLocaleLowerCase())
+    if (duplicate) { setSavingVow(false); return notify('A similar vow already exists in the shared list.') }
+    const { data, error } = await supabase.from('vows').insert({
+      name, description: newVow.description.trim() || null,
+      category: newVow.category.trim() || 'Personal', unit: newVow.unit.trim() || null,
+      created_by: profile.id
+    }).select().single()
+    if (error) { setSavingVow(false); return notify(error.message) }
+    setSavingVow(false)
+    setVows(old => [...old, data as Vow].sort((a, b) => a.name.localeCompare(b.name)))
+    setSelectedIds(old => [...old, data.id])
+    setNewVow({ name: '', description: '', category: 'Personal', unit: '' })
+    notify('Vow added to the shared list and selected for you.')
+  }
+
+  async function saveSelections() {
+    if (!supabase || !profile) return
+    if (!selectedIds.length) return notify('Please select at least one vow.')
+    setLoading(true)
+    try {
+      const { error } = await supabase.rpc('save_initial_kartik_sankalps', { p_vow_ids: [...new Set(selectedIds)] })
+      if (error) throw error
+      await loadCore(profile.id)
+      setScreen('dashboard')
+      notify('Your Kartik sankalps are saved and locked.')
+    } catch (err: any) {
+      notify(err.message || 'Could not save sankalps. Please refresh and try again.')
+    } finally { setLoading(false) }
+  }
+
+  async function saveTodayCheckin() {
+    if (!supabase || !profile) return
+    if (!myVows.length) return notify('Please save your sankalps before checking in.')
+    setLoading(true)
+    try {
+      const currentDay = today()
+      const rows = myVows.map(vow => {
+        const completed = Boolean(drafts[vow.id]?.completed)
+        return {
+          user_id: profile.id,
+          vow_id: vow.id,
+          log_date: currentDay,
+          quantity: null,
+          unit: null,
+          progress_percent: completed ? 100 : 0,
+          completed,
+          reason: null,
+          notes: null,
+          updated_at: new Date().toISOString()
+        }
+      })
+      const { error } = await supabase.from('daily_logs').upsert(rows, { onConflict: 'user_id,vow_id,log_date' })
+      if (error) throw error
+      setLogDate(currentDay)
+      await loadCore(profile.id)
+      notify('Today’s sankalp check-in saved.')
+    } catch (err: any) {
+      notify(err.message || 'Could not save today’s check-in. Please try again.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
 
   async function loadAdmin() {
     if (!supabase || profile?.role !== 'admin') return
