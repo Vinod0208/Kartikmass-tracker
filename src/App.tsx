@@ -19,7 +19,6 @@ function App() {
   const [resetPasswordMode, setResetPasswordMode] = useState(false)
   const [newPassword, setNewPassword] = useState('')
   const [savingVow, setSavingVow] = useState(false)
-  const [savingLogId, setSavingLogId] = useState<string | null>(null)
   const [authName, setAuthName] = useState('')
   const [authEmail, setAuthEmail] = useState('')
   const [authPassword, setAuthPassword] = useState('')
@@ -173,29 +172,37 @@ function App() {
     } finally { setLoading(false) }
   }
 
-  async function saveLog(vowId: string) {
+  async function saveTodayCheckin() {
     if (!supabase || !profile) return
-    setSavingLogId(vowId)
+    if (!myVows.length) return notify('Please save your sankalps before checking in.')
+    setLoading(true)
     try {
-      const d = drafts[vowId]
-      if (!d) throw new Error('Please wait for the daily form to load.')
-      const quantity = d.quantity.trim() === '' ? null : Number(d.quantity)
-      if (quantity !== null && (!Number.isFinite(quantity) || quantity < 0)) throw new Error('Quantity must be a non-negative number.')
-      if (quantity !== null && quantity > 9999999999) throw new Error('Quantity is too large.')
       const currentDay = today()
-      setLogDate(currentDay)
-      const { error } = await supabase.from('daily_logs').upsert({
-        user_id: profile.id, vow_id: vowId, log_date: currentDay,
-        quantity, unit: d.unit.trim() || null, progress_percent: d.completed ? 100 : Math.max(0, Math.min(100, Math.round(d.progress))),
-        completed: d.completed, reason: d.reason.trim().slice(0, 1000) || null, notes: d.notes.trim().slice(0, 2000) || null,
-        updated_at: new Date().toISOString()
-      }, { onConflict: 'user_id,vow_id,log_date' })
+      const rows = myVows.map(vow => {
+        const completed = Boolean(drafts[vow.id]?.completed)
+        return {
+          user_id: profile.id,
+          vow_id: vow.id,
+          log_date: currentDay,
+          quantity: null,
+          unit: null,
+          progress_percent: completed ? 100 : 0,
+          completed,
+          reason: null,
+          notes: null,
+          updated_at: new Date().toISOString()
+        }
+      })
+      const { error } = await supabase.from('daily_logs').upsert(rows, { onConflict: 'user_id,vow_id,log_date' })
       if (error) throw error
+      setLogDate(currentDay)
       await loadCore(profile.id)
-      notify('Daily sankalp progress saved.')
+      notify('Today’s sankalp check-in saved.')
     } catch (err: any) {
-      notify(err.message || 'Could not save daily progress. Please try again.')
-    } finally { setSavingLogId(null) }
+      notify(err.message || 'Could not save today’s check-in. Please try again.')
+    } finally {
+      setLoading(false)
+    }
   }
 
   async function loadAdmin() {
@@ -291,15 +298,6 @@ function App() {
       {screen === 'choose' && <section className="content-stack">
         <div className="section-intro"><div><h2>Choose your Kartik vows</h2><p>Select the vows you want to observe throughout Kartik Maas. You can select multiple vows.</p></div><span className="count-badge">{selectedIds.length} selected</span></div>
         <div className="notice-card"><Heart size={20}/><p>Choose sincerely and follow the guidance shared by ISKCON Dehradun. Your selected vows will be private to your account.</p></div>
-        <div className="vow-grid">
-          {vows.map(vow => <label key={vow.id} className={selectedIds.includes(vow.id) ? 'vow-card selected' : 'vow-card'}>
-            <input type="checkbox" checked={selectedIds.includes(vow.id)} onChange={e => setSelectedIds(old => e.target.checked ? [...old, vow.id] : old.filter(id => id !== vow.id))}/>
-            <span className="custom-check">{selectedIds.includes(vow.id) && <Check size={15}/>}</span>
-            <div className="vow-card-icon"><Sparkles size={18}/></div>
-            <strong>{vow.name}</strong><p>{vow.description || 'A personal Kartik sankalp.'}</p>
-            <div className="vow-meta"><span>{vow.category}</span>{vow.unit && <span>Unit: {vow.unit}</span>}</div>
-          </label>)}
-        </div>
         <form className="panel add-vow-panel" onSubmit={addVow}>
           <div className="panel-heading"><div><h3>Add a new shared vow</h3><p>Your vow will be visible immediately to all signed-in devotees.</p></div><div className="icon-soft"><Plus size={19}/></div></div>
           <div className="form-grid">
@@ -310,6 +308,16 @@ function App() {
           </div>
           <button className="btn btn-secondary" type="submit" disabled={savingVow}>{savingVow ? <><span className="spinner"/> Adding…</> : <><Plus size={17}/> Add to shared list</>}</button>
         </form>
+
+        <div className="vow-grid">
+          {vows.map(vow => <label key={vow.id} className={selectedIds.includes(vow.id) ? 'vow-card selected' : 'vow-card'}>
+            <input type="checkbox" checked={selectedIds.includes(vow.id)} onChange={e => setSelectedIds(old => e.target.checked ? [...old, vow.id] : old.filter(id => id !== vow.id))}/>
+            <span className="custom-check">{selectedIds.includes(vow.id) && <Check size={15}/>}</span>
+            <div className="vow-card-icon"><Sparkles size={18}/></div>
+            <strong>{vow.name}</strong><p>{vow.description || 'A personal Kartik sankalp.'}</p>
+            <div className="vow-meta"><span>{vow.category}</span>{vow.unit && <span>Unit: {vow.unit}</span>}</div>
+          </label>)}
+        </div>
         <div className="sticky-actions"><span>{selectedIds.length} vows selected</span><button className="btn btn-primary" disabled={loading || !selectedIds.length} onClick={saveSelections}>{loading ? <><span className="spinner"/> Saving…</> : <>Save my sankalps <CheckCircle2 size={17}/></>}</button></div>
       </section>}
 
@@ -326,21 +334,32 @@ function App() {
           <div className="section-intro"><div><h2>Today's Sankalp Check-in</h2><p>Record your practice for today. Daily entries can only be created or changed for the current day.</p></div><span className="count-badge">Today only</span></div>
           <div className="daily-list">
             {myVows.map(vow => {
-              const d = drafts[vow.id] || {quantity:'',unit:vow.unit || '',progress:0,completed:false,reason:'',notes:''}
-              return <article className="daily-card" key={vow.id}>
-                <div className="daily-card-head"><div className="daily-vow-icon"><Sparkles size={19}/></div><div className="daily-vow-title"><h3>{vow.name}</h3><span>{vow.category}{vow.unit ? ` · Suggested unit: ${vow.unit}` : ''}</span></div><label className="done-toggle"><input type="checkbox" checked={d.completed} onChange={e => setDrafts(old => ({...old,[vow.id]:{...d,completed:e.target.checked,progress:e.target.checked ? 100 : d.progress}}))}/><span><Check size={14}/></span> Done</label></div>
-                <div className="daily-fields">
-                  <label className="field"><span>Quantity completed</span><input type="number" min="0" step="any" value={d.quantity} onChange={e => setDrafts(old => ({...old,[vow.id]:{...d,quantity:e.target.value}}))} placeholder="e.g. 16"/></label>
-                  <label className="field"><span>Unit</span><input value={d.unit} maxLength={40} onChange={e => setDrafts(old => ({...old,[vow.id]:{...d,unit:e.target.value}}))} placeholder="rounds, minutes..."/></label>
-                  <label className="field progress-field"><span>Progress <b>{d.completed ? 100 : d.progress}%</b></span><input type="range" min="0" max="100" value={d.completed ? 100 : d.progress} onChange={e => setDrafts(old => ({...old,[vow.id]:{...d,progress:Number(e.target.value),completed:Number(e.target.value) === 100}}))}/><div className="progress-track"><span style={{width:`${d.completed ? 100 : d.progress}%`}}/></div></label>
-                </div>
-                <div className="daily-fields bottom-fields">
-                  <label className="field"><span>If not completed, reason (optional)</span><input value={d.reason} onChange={e => setDrafts(old => ({...old,[vow.id]:{...d,reason:e.target.value}}))} placeholder="e.g. unwell, time constraints"/></label>
-                  <label className="field"><span>Notes (optional)</span><input value={d.notes} onChange={e => setDrafts(old => ({...old,[vow.id]:{...d,notes:e.target.value}}))} placeholder="Add a reflection or note"/></label>
-                </div>
-                <div className="daily-card-footer"><span className="autosave-hint">Save this day's entry when ready</span><button className="btn btn-primary btn-small" disabled={savingLogId !== null} onClick={() => saveLog(vow.id)}>{savingLogId === vow.id ? <><span className="spinner"/> Saving…</> : <>Save progress <Check size={15}/></>}</button></div>
+              const d = drafts[vow.id] || { quantity: '', unit: vow.unit || '', progress: 0, completed: false, reason: '', notes: '' }
+              return <article className="daily-card daily-checkin-card" key={vow.id}>
+                <label className={d.completed ? 'daily-check-row completed' : 'daily-check-row'}>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(d.completed)}
+                    disabled={loading}
+                    onChange={e => setDrafts(old => ({
+                      ...old,
+                      [vow.id]: { ...d, completed: e.target.checked, progress: e.target.checked ? 100 : 0 }
+                    }))}
+                  />
+                  <span className="daily-check-custom">{d.completed && <Check size={16} />}</span>
+                  <span className="daily-check-copy">
+                    <strong>{vow.name}</strong>
+                    <small>{vow.category}{d.completed ? ' · Completed today' : ' · Not checked yet'}</small>
+                  </span>
+                </label>
               </article>
             })}
+          </div>
+          <div className="sticky-actions daily-save-actions">
+            <span>{myVows.filter(v => drafts[v.id]?.completed).length} of {myVows.length} sankalps completed today</span>
+            <button className="btn btn-primary" disabled={loading || myVows.length === 0} onClick={saveTodayCheckin}>
+              {loading ? <><span className="spinner"/> Saving check-in…</> : <>Save today's check-in <CheckCircle2 size={17}/></>}
+            </button>
           </div>
           <div className="panel history-panel"><div className="panel-heading"><div><h3>My daily history</h3><p>Your saved entries, grouped by date.</p></div><CalendarDays size={20}/></div>
             {logs.length === 0 ? <Empty text="No daily entries yet. Update one of your sankalps above to begin your history."/> :
@@ -396,7 +415,7 @@ function AuthScreen(props: {
       {props.mode !== 'forgot' && <label className="field"><span>Password</span><input required type="password" minLength={props.mode==='signup'?8:1} autoComplete={props.mode==='signup'?'new-password':'current-password'} value={props.password} onChange={e=>props.setPassword(e.target.value)} placeholder={props.mode==='signup'?'At least 8 characters':'Your password'}/></label>}
       {props.mode === 'login' && <p className="auth-switch forgot-link"><button type="button" onClick={props.onForgot}>Forgot password?</button></p>}
       <button className="btn btn-primary auth-submit" disabled={props.busy}>{props.busy ? <><span className="spinner"/> Please wait…</> : <>{props.mode==='signup'?'Create account':props.mode==='forgot'?'Send reset link':'Sign in'} <CheckCircle2 size={17}/></>}</button>
-      <p className="auth-switch">{props.mode==='signup'?'Already have an account?':props.mode==='forgot'?'Remembered your password?':'New to the tracker?'} <button type="button" onClick={()=>props.setMode(props.mode==='signup'?'login':'login')}>{props.mode==='signup'?'Sign in':'Back to sign in'}</button></p>
+      <p className="auth-switch">{props.mode==='signup'?'Already have an account?':props.mode==='forgot'?'Remembered your password?':'New to the tracker?'} <button type="button" onClick={()=>props.setMode(props.mode==='signup' || props.mode==='forgot' ? 'login' : 'signup')}>{props.mode==='signup'?'Sign in':props.mode==='forgot'?'Back to sign in':'Create account'}</button></p>
       <p className="privacy-foot">Your daily notes are private to your account and authorized temple administrators.</p>
     </form></div>
   </div>
