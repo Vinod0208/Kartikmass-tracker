@@ -139,11 +139,11 @@ function App() {
     if (!selectedIds.length) return notify('Please select at least one vow.')
     setLoading(true)
     try {
-      const { error } = await supabase.rpc('save_initial_kartik_sankalps', { p_vow_ids: [...new Set(selectedIds)] })
+      const { error } = await supabase.rpc('save_kartik_sankalps', { p_vow_ids: [...new Set(selectedIds)] })
       if (error) throw error
       await loadCore(profile.id)
       setScreen('dashboard')
-      notify('Your Kartik sankalps are saved and locked.')
+      notify('Your Kartik sankalps have been updated.')
     } catch (err: any) {
       notify(err.message || 'Could not save sankalps. Please refresh and try again.')
     } finally { setLoading(false) }
@@ -166,7 +166,7 @@ function App() {
           progress_percent: completed ? 100 : 0,
           completed,
           reason: null,
-          notes: null,
+          notes: drafts[vow.id]?.notes?.trim() || null,
           updated_at: new Date().toISOString()
         }
       })
@@ -273,7 +273,7 @@ function App() {
       <div className="program-chip"><Sparkles size={15} /> Kartik Maas Program</div>
       <nav>
         <button className={screen === 'dashboard' ? 'nav-item active' : 'nav-item'} onClick={() => setScreen('dashboard')}><LayoutDashboard size={18} /> My Dashboard</button>
-        {firstVisit && <button className={screen === 'choose' ? 'nav-item active' : 'nav-item'} onClick={() => { setSelectedIds(selections.map(s => s.vow_id)); setScreen('choose') }}><ClipboardList size={18} /> Choose Sankalps</button>}
+        <button className={screen === 'choose' ? 'nav-item active' : 'nav-item'} onClick={() => { setSelectedIds(selections.map(s => s.vow_id)); setScreen('choose') }}><ClipboardList size={18} /> {firstVisit ? 'Choose Sankalps' : 'Update my Sankalps'}</button>
         {profile?.role === 'admin' && <button className={screen === 'admin' ? 'nav-item active' : 'nav-item'} onClick={() => setScreen('admin')}><ShieldCheck size={18} /> Admin Dashboard</button>}
       </nav>
       <div className="sidebar-bottom">
@@ -292,8 +292,8 @@ function App() {
       {loading && <div className="loading-line"><span /></div>}
 
       {screen === 'choose' && <section className="content-stack">
-        <div className="section-intro"><div><h2>Choose your Kartik vows</h2><p>Select the vows you want to observe throughout Kartik Maas. You can select multiple vows.</p></div><span className="count-badge">{selectedIds.length} selected</span></div>
-        <div className="notice-card"><Heart size={20}/><p>Choose sincerely and follow the guidance shared by ISKCON Dehradun. Your selected vows will be private to your account.</p></div>
+        <div className="section-intro"><div><h2>Choose your Kartik vows</h2><p>Choose the vows you want to observe throughout Kartik Maas. You can update this selection any time.</p></div><span className="count-badge">{selectedIds.length} selected</span></div>
+        <div className="notice-card"><Heart size={20}/><p>Choose sincerely and follow the guidance shared by ISKCON Dehradun. Your selected vows will be private to your account. You can update them later.</p></div>
         <form className="panel add-vow-panel" onSubmit={addVow}>
           <div className="panel-heading"><div><h3>Add a new shared vow</h3><p>Your vow will be visible immediately to all signed-in devotees.</p></div><div className="icon-soft"><Plus size={19}/></div></div>
           <div className="form-grid">
@@ -327,7 +327,7 @@ function App() {
             <Stat icon={<Activity size={19}/>} label="Today's Progress" value={`${dailyPercent}%`} detail="Average across your vows" />
             <Stat icon={<CalendarDays size={19}/>} label="Days with entries" value={String(new Set(logs.map(l => l.log_date)).size)} detail="Days you have logged" />
           </div>
-          <div className="section-intro"><div><h2>Today's Sankalp Check-in</h2><p>Record your practice for today. Daily entries can only be created or changed for the current day.</p></div><span className="count-badge">Today only</span></div>
+          <div className="section-intro"><div><h2>Today's Sankalp Check-in</h2><p>Record your practice for today. Add an optional note for each vow. Daily entries can only be created or changed for the current day.</p></div><button className="btn btn-secondary" onClick={() => { setSelectedIds(selections.map(s => s.vow_id)); setScreen('choose') }}><ClipboardList size={16}/> Update my vows</button></div>
           <div className="daily-list">
             {myVows.map(vow => {
               const d = drafts[vow.id] || { quantity: '', unit: vow.unit || '', progress: 0, completed: false, reason: '', notes: '' }
@@ -347,6 +347,20 @@ function App() {
                     <strong>{vow.name}</strong>
                     <small>{vow.category}{d.completed ? ' · Completed today' : ' · Not checked yet'}</small>
                   </span>
+                </label>
+                <label className="field daily-note-field">
+                  <span>Notes (optional)</span>
+                  <textarea
+                    rows={2}
+                    maxLength={1000}
+                    value={d.notes}
+                    disabled={loading}
+                    onChange={e => setDrafts(old => ({
+                      ...old,
+                      [vow.id]: { ...d, notes: e.target.value }
+                    }))}
+                    placeholder="Add a short note about today's practice (optional)"
+                  />
                 </label>
               </article>
             })}

@@ -19,3 +19,16 @@
 @media (max-width: 640px) { .daily-check-row { padding: 16px; gap: 12px; } .daily-save-actions { align-items: stretch; flex-direction: column; } .daily-save-actions .btn { width: 100%; justify-content: center; } }
 
 .action-row{display:flex;flex-wrap:wrap;gap:6px;min-width:190px}.action-row .btn{white-space:nowrap}
+
+.daily-note-field {
+  display: block;
+  margin: 0 16px 16px 52px;
+}
+.daily-note-field textarea {
+  width: 100%;
+  min-height: 64px;
+  resize: vertical;
+}
+@media (max-width: 640px) {
+  .daily-note-field { margin-left: 12px; margin-right: 12px; }
+}
